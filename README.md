@@ -81,3 +81,10 @@ With the growing adoption of voice biometrics worldwide, now is the ideal time f
 6. Activate the virtual environment `.venv/bin/activate`
 7. Install dependencies into the virtual environment: `pip install -r requirements.txt`
 8. Use jupyter notebook to open 'final_notebook'
+
+## Demo
+To run a demo version of the system:
+* Fork and clone [github repo](https://github.com/dolgorp/verification) to your local machine 
+* Open and run 'numbers.py' file from 'src' folder
+* Open a 'link' from terminal to access a demo system
+* Use audio pre-recorded audio files or record them using UI
