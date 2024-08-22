@@ -23,6 +23,8 @@ The Speech Commands Dataset v0.02 consists of over 105,000 one-second .wav audio
 [Final Notebook](/path/to/file)
 [Presentation](/path/to/file)
 
+Model Saved https://drive.google.com/drive/folders/1h-FudBMLzDU5_m823dHFsR2q8ZTrTBLl?usp=share_link
+
  ## Reproduction instsructions
 
 
