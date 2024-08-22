@@ -56,30 +56,27 @@ With the growing adoption of voice biometrics worldwide, now is the ideal time f
 - **Invest in Data Diversity:** Prioritize gathering diverse training data, including different accents and voice variations, to ensure the system is robust and inclusive for all clients.
 - **Test System:** Conduct thorough testing of the system in different conditions to ensure it performs well across various scenarios. This includes testing with different accents, background noises, and varying voice qualities.
 - **Implement the System:** After successful testing, deploy the system into the production environment.
-- 
+
 ## Repository Navigation
 
+* Final Notebook - final_notebook.ipynb
+* Slides - presentation.pdf
+* Code for models, demo, FSM, requirments.txt - 'src' folder
+* Digrams and visuals - 'images' folder
+  
 ## Links
 
-[Final Notebook](final_notebook.ipynb)
-[Presentation](presentation.pdf)
-[Models Checkpoints Saved](https://drive.google.com/drive/folders/1h-FudBMLzDU5_m823dHFsR2q8ZTrTBLl?usp=share_link)
+* [Final Notebook](final_notebook.ipynb) 
+* [Presentation](presentation.pdf)
+* [Models Checkpoints Saved](https://drive.google.com/drive/folders/1h-FudBMLzDU5_m823dHFsR2q8ZTrTBLl?usp=share_link)
 
- ## Reproduction instsructions
+## Reproduction instsructions
 
-
-
-
-
-
-
-
-First Simple Model - CNN
-Model is located in src/__main__.py
-
-* Trained on one word 'marvin' for now
-* Around 800 rows
-
-Best result at this point:
-Train loss: 0.5531. Test Loss: 0.6530. Precision 0.6522. Recall: 0.7792. F1 score: 0.7101. 
-
+1. [Download Google command speech data set](https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_v0.02.tar.gz)
+2. Save all files into 'data_raw' folder, save folders with digits (0-10) into a 'data_numbers_wav' folder
+3. Fork current repo
+4. Clone repo to local folder
+5. Create virtual environment: `python -m venv .venv`
+6. Activate the virtual environment `.venv/bin/activate`
+7. Install dependencies into the virtual environment: `pip install -r requirements.txt`
+8. Use jupyter notebook to open 'final_notebook'
