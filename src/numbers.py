@@ -1,9 +1,11 @@
+from datetime import datetime
 import os  # module for os operating, files
 import random  # used for randomness in the code
 import torchaudio  # deals with audio data
 import torchaudio.transforms as T  # for applying audio tranformations
 from sklearn.model_selection import train_test_split  # splits data
 
+import gradio as gr
 import torch  # core pytorch library
 import torch.optim as optim  # used for updating model weights during training, optimisation algorithms
 import torch.nn as nn  # classes and tools for neural networks
@@ -12,6 +14,7 @@ from torch.utils.data import (
     DataLoader,
     Dataset,
 )  # load data in batches for traning and creates datasets
+from voice import VoiceModel
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -107,196 +110,209 @@ def to_pairs(path, limit):
     labels_tensor = torch.cat(labels_tensors, dim=0)
     return audio_samples_tensor, labels_tensor
 
+class NumbersDataset(Dataset):
 
-class NumbersDataset(Dataset):  # dataset class for audio data
-    def __init__(self, audio_samples_tensor, labels_tensor):  # initiate, intake pairs
-        self.audio_samples_tensor = audio_samples_tensor  # store pairs
-        self.labels_tensor = labels_tensor  # store pairs
+    def __init__(self, audio, label):
+        assert audio.size(0) == label.size(0)
+        self.audio = audio
+        self.label = label
 
-    def __len__(self):  # length method
-        return len(self.audio_samples_tensor)  # returns number of pairs
-
-    def __getitem__(self, idx):  # new method
-        audio_samples_tensor = self.audio_samples_tensor[idx]  # assign variables
-        labels_tensor = self.labels_tensor[idx]  # assign variables
-        # [1, 8000], [10]
-        return (
-            audio_samples_tensor,
-            labels_tensor,
-        )  # returns the pair of spectrograms and label as a tensor
+    def __getitem__(self, index): 
+        return (self.audio[index], self.label[index]) #tuples
+    
+    def __len__(self):
+        return self.audio.size(dim=0) #assuming audio and label tensors are same size
 
 
-class CnnBlock(nn.Module):  # make CNN block class
-    def __init__(
-        self, in_channels, out_channels, kernel=3, stride=1, padding=1
-    ):  # initialize with hyperparametrs
-        super(CnnBlock, self).__init__()  # call the parent class constructor - module
-        self.conv1 = nn.Conv1d(  # first convolutional layer with parameters
-            in_channels,  # ToDo: read about convolution more
-            out_channels,
-            kernel_size=kernel,
-            stride=stride,
-            padding=padding,
-        )
-        self.bn1 = nn.BatchNorm1d(
-            out_channels
-        )  # batch normalization after first convolution
-        self.conv2 = nn.Conv1d(  # second convolutional layer
-            out_channels, out_channels, kernel_size=kernel, stride=1, padding=padding
-        )
-        self.bn2 = nn.BatchNorm1d(
-            out_channels
-        )  # batch normalization after second convolution
+class NumbersModel(nn.Module):
 
-        # Residual connection
-        # ToDo: explain why it is needed for CNN (hint: signal decay)
-        self.shortcut = (
-            nn.Sequential()
-        )  # make an empty sequential layer for the shortcut connection
-        if (
-            stride != 1 or in_channels != out_channels
-        ):  # if stride or channel count changes, adjust the shortcut with a 1x1 convolution and batch norm
-            self.shortcut = nn.Sequential(
-                nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride),
-                nn.BatchNorm1d(out_channels),
-            )
-        self.relu = nn.ReLU()  # relu activated
-
-    def forward(self, x):
-        out = F.relu(
-            self.bn1(self.conv1(x))
-        )  # apply the first conv layer, batch norm, and ReLU activation
-        out = self.bn2(self.conv2(out))  # apply the second conv layer and batch norm
-        out = out + self.shortcut(x)  # add the shortcut to the output
-        out = F.relu(out)  # activate relu to output
-        return out
-
-
-class NumbersModel(nn.Module):  # new class
-    def __init__(self):
-        super(
-            NumbersModel, self
-        ).__init__()  # call the parent class constructor - voicematchmodule
+    def __init__(self, checkpoint_path = None):
+        super().__init__()
         # [B, 1, 8000]
-        self.cnn_layers = nn.Sequential(  # define CNN layers
-            CnnBlock(1, 16),  # first cnn block [B, 16, 8000]
-            CnnBlock(16, 32, stride=2),  # second cnn block [B, 32, 4000]
-            CnnBlock(32, 64, stride=2),  # third cnn block [B, 64, 2000]
-            CnnBlock(64, 128, stride=2),  # fourth cnn block [B, 128, 1000]
-            CnnBlock(128, 256, stride=2),  # fourth cnn block [B, 256, 500]
-        )
+        self.cnn1 = BlockCNN(in_channels=1, out_channels=16, stride = 1, kernel_size= 3, padding = 1)
+        # [B, 16, 8000]
+        self.cnn2 = BlockCNN(in_channels=16, out_channels=32, stride = 2, kernel_size = 3, padding = 1)
+        # [B, 32, 4000]
+        self.cnn3 = BlockCNN(in_channels=32, out_channels=64, stride = 2, kernel_size = 3, padding = 1)
+        # [B, 64, 2000]
+        self.cnn4 = BlockCNN(in_channels=64, out_channels=128, stride = 2, kernel_size = 3, padding = 1)
+        # [B, 128, 1000]
+        self.cnn5 = BlockCNN(in_channels=128, out_channels=256, stride = 2, kernel_size = 3, padding = 1)
+        # [B, 256, 500]
 
-        # [B, 128 * 1000] -  incoming shape
-        self.fc_layers = nn.Sequential(  # define fully connected layers
-            nn.Linear(256 * 500, 256),  # first linear layer
-            nn.ReLU(),  # relu activation
-            nn.Dropout(0.5),  # dropout regularization (50% dropout rate)
-            nn.Linear(256, 128),  # second linera layer
-            nn.ReLU(),  # relu activation
-            nn.Dropout(0.5),  # dropout regularization (50% dropout rate)
-            nn.Linear(128, 64),  # third linera layer
-            nn.ReLU(),  # relu activation
-            nn.Dropout(0.5),  # dropout regularization (50% dropout rate)
-            nn.Linear(64, 10),  # fourth linera layer
-            # nn.Softmax(), #softmax activation
-        )
+        #self.flatten = nn.Flatten()
+
+        self.fc1 =  nn.Linear(in_features=256 * 500, out_features=256)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout1d(p=0.5)
+
+        self.fc2 =  nn.Linear(in_features=256, out_features=128)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout1d(p=0.5)
+
+        self.fc3 =  nn.Linear(in_features=128, out_features=64)
+        self.relu3 = nn.ReLU()
+        self.dropout3 = nn.Dropout1d(p=0.5)
+
+        self.fc4 =  nn.Linear(in_features=64, out_features=10)
+
+        #self.softmax = nn.Softmax(dim=1)
+
+        if checkpoint_path:
+            self.load_state_dict(torch.load(checkpoint_path, map_location=DEVICE))
+    
+    def forward(self, audio):
+        x = self.cnn1(audio)
+        x = self.cnn2(x)
+        x = self.cnn3(x)
+        x = self.cnn4(x)
+        x = self.cnn5(x)
+
+        x = torch.reshape(x, (x.size(0), x.size(1) * x.size(2)))
+
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout1(x)
+
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.dropout2(x)
+
+        x = self.fc3(x)
+        x = self.relu3(x)
+        x = self.dropout3(x)
+
+        x = self.fc4(x)
+
+        return x
+
+
         """
-        X:          [0,     1,      2,      3,      4,      5,      6,      7,       8,      9]
-        Y= P(X):    [0.1,   0.1,    0.1,    0.2,    0.2,    0.1,    0.0,     0.0,    0.1,    0.1]
+        Architecture
+        audio > 5 cnn blocks > 4 FC layers > [10]
+
+        1. audio [B, 1, 8000] > 
+        2. CNN1: audio [B, 16, 8000] (params in: 1, out: 16 ; stride = 1, kernel = 3, padding = 1)
+        3. CNN2: audio [B, 32, 4000] > (params in: 16, out: 32 ; stride = 2, kernel = 3, padding = 1)
+        4. CNN3: audio [B. 64, 2000] > (params in: 32, out: 64 ; stride = 2, kernel = 3, padding = 1)
+        5. CNN4: audio [B. 128, 1000] > (params in: 64, out: 128 ; stride = 2, kernel = 3, padding = 1)
+        6. CNN5: audio [B, 256, 500] (params in: 128, out: 256 ; stride = 2, kernel = 3, padding = 1)
+        7. Flattening to [B, 256 * 500] 
+        8. FC1: audio [B, 256] (params in: 256 * 500, out: 256)
+        AF: ReLu, Drop out = nn.Dropout(p=0.5)
+        9. FC2: audio [B, 128] (params in: 256, out: 128)
+        AF: ReLu, Drop out = nn.Dropout(p=0.5)
+        10. FC3: audio [B, 64] (params in: 128, out: 64)
+        AF: ReLu, Drop out = nn.Dropout(p=0.5)
+        11. FC4: audio [B, 10] (params in: 64, out: 10)
         """
+class BlockCNN(nn.Module):
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, 1, 8000]
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding): 
+        super().__init__()
+        self.cnn1 = nn.Conv1d(in_channels ,out_channels, kernel_size, stride, padding)
+        self.batchnorm1 = nn.BatchNorm1d(out_channels)
+        self.relu1 = nn.ReLU()
 
-        # Forward through CNN layers
-        x = self.cnn_layers(x)  # pass the input through the CNN layers
-        # x: [B, 128, 1000]
+        self.cnn2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=1, padding=1)
+        self.batchnorm2 = nn.BatchNorm1d(out_channels)
+        self.relu2 = nn.ReLU()
 
-        # flatten x1
-        x = x.view(x.size(0), -1)
-        # x: [B, 128 * 1000]
-
-        # Forward through linear (fully-connected) layers
-        x = self.fc_layers(
-            x
-        )  # pass through the fully connected layers to get the final output
-        # x: [B, 10]
-        return x  # return the final output (probability distribution across digits)
+        self.shortcut_cnn = nn.Conv1d(in_channels ,out_channels, kernel_size, stride, padding)
+        self.shortcut_batchnorm = nn.BatchNorm1d(out_channels)
 
 
-def train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=10):  # create function for training
-    model.train()  # set the model to training mode
-    with torch.autograd.set_detect_anomaly(True):  # enable anomaly detection for debugging
-        for epoch in range(num_epochs):  # loop over the number of epochs
-            running_loss = 0.0  # set running loss for the epoch
-            for (audio,labels,) in train_loader:  # batch and iterate over data in the training set
-                # audio: [B, 1, 8000]
-                # labels: [B, 10]
+    def forward(self, audio):
+        x = self.cnn1(audio)
+        x = self.batchnorm1(x)
+        x = self.relu1(x)
+        x = self.cnn2(x)
+        x = self.batchnorm2(x)
+        x = x + self.shortcut_batchnorm(self.shortcut_cnn(audio))
+        x = self.relu2(x)
+        return x
 
-                optimizer.zero_grad()  # zero the gradients before each forward pass
+    """
+    CNN Block1:
+    [B, 1, 8000]
+    1. CNN [B, 16, 8000] (params in: 1, out: 16 ; stride = 1, kernel = 3, padding = 1)
+    2. BatchNorm layer [B, 16, 8000] - number of features (params channels: 16)
+        ReLu
+    3. CNN [B, 16, 8000] (params in: 16, out: 16 ; stride = 1, kernel = 3, padding = 1)
+    4. BatchNorm layer [B, 16, 8000] - number of features (params channels: 16)
+        ReLu
+    5. Residual Connection - [B, 16, 8000] + shortcut([B, 1, 8000])
+        - shortcut (CNN 1-16, stride = 1) + batchnorm
 
-                # Move data to the appropriate device
+    CNN Block2:
+    [B, 16, 8000]
+    1. CNN [B, 32, 4000] (params in: 16, out: 32 ; stride = 2, kernel = 3, padding = 1)
+    2. BatchNorm layer [B, 32, 4000] - number of features (params channels: 32)
+        ReLu
+    3. CNN [B, 32, 4000] (params in: 32, out: 32 ; stride = 1, kernel = 3, padding = 1)
+    4. BatchNorm layer [B, 32, 4000] - number of features (params channels: 32)
+        ReLu
+    5. Residual Connection - [B, 32, 4000] + shortcut([B, 16, 8000])
+        - shortcut (CNN 16-32, stride = 2) + batchnorm
+    """
+
+def train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=50, checkpoint_path=None):
+    timestamp = datetime.now().isoformat()
+
+    model.train() #set model into training mode
+    for epoch in range(num_epochs):
+        running_loss = 0
+        for audio, label in train_loader:
+            # audio shape is [B, 8000]
+            audio = audio.to(DEVICE)
+            label = label.to(DEVICE)
+          
+            optimizer.zero_grad() #reset optimizer
+            prediction = model(audio)
+            loss = criterion(prediction, label)
+            loss.backward() #calculating updates (derivatives) for weights and biases based on loss
+            optimizer.step() #use updates and apply to the model
+            running_loss += loss * audio.size(dim=0)
+
+        # calculate average loss for epoch
+        train_loss = running_loss / len(train_loader.dataset)
+
+
+        model.eval()
+
+        predictions = []
+        labels = []
+
+        running_loss = 0
+        with torch.no_grad():
+            for audio, label in test_loader:
+                # audio shape is [B, 8000]
                 audio = audio.to(DEVICE)
-                labels = labels.to(DEVICE)
+                label = label.to(DEVICE)
+            
+                prediction = model(audio) # [B, 10]
+                loss = criterion(prediction, label) 
+    
+                running_loss += loss * audio.size(dim=0)
 
-                # Forward pass through the model
-                # audio: [B, 1, 8000]
-                # labels: [B, 10]
-                outputs = model(audio)
-                # outputs: [B, 10]
+                prediction_distribution = F.softmax(prediction, dim=1)
+                predictions.append(prediction_distribution)
+                labels.append(label)
+            
 
-                loss = criterion(outputs, labels)  # calculate the loss
-                # [B, 10]
+        # calculate average loss for epoch
+        test_loss = running_loss / len(test_loader.dataset)
 
-                # Backward pass and optimize
-                loss.backward()  # compute gradients for backpropagation
-                optimizer.step()  # update the model parameters
+        predictions = torch.cat(predictions)  # put all predictions into a single tensor
+        labels = torch.cat(labels)  # put all true labels into a single tensor
+        accuracy, f1, conf_matrix = evaluate(predictions, labels)
 
-                running_loss += loss.item() * audio.size(0)  # calculate running loss
+        print(f'Epoch: {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
-            epoch_loss = running_loss / len(
-                train_loader.dataset
-            )  # calculate average loss for epoch
-
-            # Evaluate on test data
-            model.eval()  # Set model to evaluation mode
-            test_loss = 0.0  # initialize test loss
-            all_outputs = []  # list to store all predictions
-            all_labels = []  # list to store all true labels
-            with torch.no_grad():  # disable gradient computation for testing
-                for audio, labels in test_loader:  # iterate over the test data
-                    # audio: [B, 1, 8000]
-                    # labels: [B, 10]
-
-                    audio = audio.to(DEVICE)
-                    labels = labels.to(DEVICE)
-
-                    outputs = model(audio)  # forward pass and remove single dimension
-                    # outputs: [B, 10]
-                    loss = criterion(outputs, labels)  # calculate the test loss
-                    # [B, 10]
-
-                    test_loss += loss.item() * audio.size(0)  # calculate test loss
-
-                    all_outputs.append(F.softmax(outputs, dim=-1))  # store predictions
-                    all_labels.append(labels)  # store true labels
-
-            test_loss /= len(test_loader.dataset)  # calculate average test loss
-            all_outputs = torch.cat(
-                all_outputs
-            )  # put all predictions into a single tensor
-            all_labels = torch.cat(
-                all_labels
-            )  # put all true labels into a single tensor
-            accuracy, f1, conf_matrix = evaluate(
-                all_outputs, all_labels
-            )  # evaluate precision, recall, and F1 score
-            print(  # print the metrics for the current epoch
-                f"Epoch [{epoch+1}/{num_epochs}]. Train loss: {epoch_loss:.4f}. Test Loss: {test_loss:.4f}. "
-                f"Accuracy {accuracy:.4f}. F1: {f1:.4f}."
-            )
-            model.train()  # Set model back to train mode
-
+        if checkpoint_path:
+            name = os.path.join(checkpoint_path, f'{timestamp}_e{epoch+1}_tr{train_loss:.4f}_te{test_loss:.4f}_ac{accuracy:.4f}.pth')
+            torch.save(model.state_dict(), name)
+        model.train()
 
 def evaluate(predictions_distribution, labels_distribution):
     # predictions_distribution: [B, 10] # class per digit
@@ -325,7 +341,7 @@ def evaluate(predictions_distribution, labels_distribution):
     return accuracy, f1, conf_matrix
 
 
-def run_test(dataset_limit: int, batch_size: int, lr: int):
+def run_test(dataset_limit: int, batch_size: int, lr: int, model_checkpoint_path=None, train_checkpoint_path=None):
     # Prepare data
     print("Preparing data")
     # set a limit on the total number of pairs to be generated
@@ -333,7 +349,7 @@ def run_test(dataset_limit: int, batch_size: int, lr: int):
 
     # load data into a dict from marvin folder
     audio_samples_tensor, labels_tensor = to_pairs(
-        "/root/learning-nn/resources/speech_commands", dataset_limit
+        "/Users/Dolg/Documents/Flatiron/capstone/data_numbers_wav", dataset_limit
     )
     print(f"Read {len(audio_samples_tensor)} pairs")
 
@@ -345,7 +361,7 @@ def run_test(dataset_limit: int, batch_size: int, lr: int):
     print(
         f"Running training. dataset_limit={dataset_limit}. batch_size={batch_size}. lr={lr}"
     )
-    model = NumbersModel().to(DEVICE)
+    model = NumbersModel(model_checkpoint_path).to(DEVICE)
     train_loader = DataLoader(
         dataset=NumbersDataset(as_train, l_train), batch_size=batch_size, shuffle=True
     )
@@ -354,11 +370,12 @@ def run_test(dataset_limit: int, batch_size: int, lr: int):
     )
 
     # criterion = nn.BCELoss()
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss() #log loss, criterion for assesing classification
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
+
     # Train the model
-    train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=50)
+    train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=50, checkpoint_path=train_checkpoint_path)
 
     print("Finished")
 
@@ -374,10 +391,137 @@ dataset_limit = 20_000  batch_size = 256   lr = 0.0005          Epoch [35/50]. T
 """
 
 
-for dataset_limit in [20_000]:
-    for batch_size in [32, 64]:
-        for lr in [0.001, 0.0005, 0.0002, 0.0001]:
-            run_test(dataset_limit, batch_size, lr)
+
+# for dataset_limit in [20000]:
+#     for batch_size in [32]:
+#         for lr in [0.0005]:
+#             run_test(
+#                 dataset_limit,
+#                 batch_size,
+#                 lr,
+#                 model_checkpoint_path="/Users/Dolg/Documents/Flatiron/capstone/model_checkpoints/2024_08_20T05_22_57_318460_e_30_tr_2_0492_te_1_4213_ac_0_8315.pth",
+#                 train_checkpoint_path="/Users/Dolg/Documents/Flatiron/capstone/checkpoints",
+#             )
+
+
+def to_waveform(audio):
+    sample_rate, waveform = audio
+    waveform = torch.tensor(waveform, dtype=torch.float32)
+    resampler = T.Resample(
+        orig_freq=sample_rate, new_freq=8000
+    )  # used to convert all sample rates from orig to 8000
+    waveform_resampled = resampler(waveform)  # standardize all to 8000
+
+    # Ensure waveform is exactly 8000 samples long
+    if waveform_resampled.shape[0] > 8000:
+        # change to 8000 again if not
+        waveform_resampled = waveform_resampled[:8000] 
+    elif waveform_resampled.shape[0] < 8000:
+        padding_size = 8000 - waveform_resampled.shape[0]
+        waveform_resampled = F.pad(
+            waveform_resampled, (0, padding_size)
+        )  # if its shorter it fills with 0 to reach 8000
+    return waveform_resampled.unsqueeze(0).unsqueeze(0)
+
+def server():
+    # 2024_08_20T05_22_57_318460_e_30_tr_2_0492_te_1_4213_ac_0_8315.pth
+    numbers_checkpoint_path = "/Users/Dolg/Documents/Flatiron/capstone/model_checkpoints/numbers_model_checkpoints.pth"
+    numbers_model = NumbersModel(numbers_checkpoint_path).to(DEVICE)
+    numbers_model.eval()
+
+    # 2024-08-20T15_40_02.942877_e49_tr0.4334_te0.3812_ac0.8420.pth
+    voice_checkpoint_path = "/Users/Dolg/Documents/Flatiron/capstone/model_checkpoints/voice_model_checkpoints.pth"
+    voice_model = VoiceModel(voice_checkpoint_path).to(DEVICE)
+    voice_model.eval()
+
+    def recognize_number(audio):
+        nonlocal numbers_model
+        if audio:
+            waveform = to_waveform(audio)
+            prediction = numbers_model(waveform)
+            result = torch.argmax(F.softmax(prediction, dim=1)).item()
+        else:
+            result = '-'
+        return result
+    
+    def same_voice(audio1, audio2):
+        nonlocal voice_model
+        if audio1 and audio2:
+            waveform1 = to_waveform(audio1)
+            waveform2 = to_waveform(audio2)
+            prediction = voice_model(waveform1, waveform2)
+            if prediction >= 0.5:
+                result = "✓"
+            else:
+                result = "X"
+        else:
+            result = '-'
+        return result
+    
+    # Define a function to handle the audio inputs
+    def process_audio(audio1, audio2, audio3, audio4):
+        num1 = recognize_number(audio1)
+        num2 = recognize_number(audio2)
+        num3 = recognize_number(audio3)
+        num4 = recognize_number(audio4)
+        # This is just a placeholder function. You can add your own logic here.
+        return f"{num1}{num2}{num3}{num4}"
+
+
+    # Define a function to handle the audio inputs
+    def verify_audio(audio1, audio2, audio3, audio4, audio5, audio6, audio7, audio8):
+        num1 = recognize_number(audio1)
+        num2 = recognize_number(audio2)
+        num3 = recognize_number(audio3)
+        num4 = recognize_number(audio4)
+
+        num5 = recognize_number(audio5)
+        num6 = recognize_number(audio6)
+        num7 = recognize_number(audio7)
+        num8 = recognize_number(audio8)
+
+        verdict1 = same_voice(audio1, audio5)
+        verdict2 = same_voice(audio2, audio6)
+        verdict3 = same_voice(audio3, audio7)
+        verdict4 = same_voice(audio4, audio8)
+
+        # This is just a placeholder function. You can add your own logic here.
+        return f"{num5}{num6}{num7}{num8}. Same voice: {verdict1}{verdict2}{verdict3}{verdict4}"
+    # Create the Gradio interface
+    with gr.Blocks() as demo:
+        with gr.Row():
+            audio1 = gr.Audio(label="Audio Input 1", type="numpy")
+            audio2 = gr.Audio(label="Audio Input 2", type="numpy")
+            audio3 = gr.Audio(label="Audio Input 3", type="numpy")
+            audio4 = gr.Audio(label="Audio Input 4", type="numpy")
+        
+        output_text = gr.Textbox(label="PIN")
+
+        # Connect the inputs to the function
+        gr.Button("Save").click(
+            process_audio, 
+            inputs=[audio1, audio2, audio3, audio4], 
+            outputs=output_text
+        )
+
+        with gr.Row():
+            audio5 = gr.Audio(label="Audio Input 5", type="numpy")
+            audio6 = gr.Audio(label="Audio Input 6", type="numpy")
+            audio7 = gr.Audio(label="Audio Input 7", type="numpy")
+            audio8 = gr.Audio(label="Audio Input 8", type="numpy")
+
+        output_text = gr.Textbox(label="Verdict")
+
+        # Connect the inputs to the function
+        gr.Button("Verify").click(
+            verify_audio, 
+            inputs=[audio1, audio2, audio3, audio4, audio5, audio6, audio7, audio8], 
+            outputs=output_text
+        )
+    # Launch the demo
+    demo.launch()
+
+server()
 
 """
 Log:
