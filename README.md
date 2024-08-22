@@ -40,7 +40,7 @@ The system architecture for this voice-based client verification system consists
 
 **Voice verification Model Architecture:**
 
-![alt text](images/Model2.png)
+![alt text](images/Model2.jpg)
 
 ## Evaluation
 
