@@ -14,17 +14,18 @@ The Speech Commands Dataset v0.02 consists of over 105,000 one-second .wav audio
 
 ## Data preprocessing 
 
-In this project, we process audio data for client verification. The steps include converting WAV files into waveforms, resampling the audio to 8000 Hz, and transforming them into tensors of shape (1, 8000). The project uses two datasets:
-Dataset 1: Contains audio files and their corresponding labels (digits 0-9) for PIN verification.
-Dataset 2: Includes pairs of audio files (Audio1, Audio2) and labels (1/0) indicating whether the audios belong to the same user (1) or not (0) for user identity verification.
+In this project, we process audio data for client verification. The steps include converting WAV files into waveforms, resampling the audio to 8000 Hz, and transforming them into tensors of shape (1, 8000).  
+The project uses two datasets:
+* Dataset 1: Contains audio files and their corresponding labels (digits 0-9) for PIN verification.
+* Dataset 2: Includes pairs of audio files (Audio1, Audio2) and labels (1/0) indicating whether the audios belong to the same user (1) or not (0) for user identity verification.
 
 
 ## Modeling
 We chose a Convolutional Neural Network (CNN) for this voice verification project because of its ability to process and extract features directly from audio data. We chose PyTorch for building and training our Convolutional Neural Network (CNN) 
 
 In this project the **target variable** is a binary label indicating whether the input voice belongs to a client or not:
-1 (or True): If the input voice is verified as belonging to a client.
-0 (or False): If the input voice does not belong to a client.
+* 1 (or True): If the input voice is verified as belonging to a client.
+* 0 (or False): If the input voice does not belong to a client.
 
 The system architecture for this voice-based client verification system consists of two main components:
 
